@@ -1,8 +1,8 @@
 pragma solidity ^0.4.24;
 
-// * dice2.win - fair games that pay Ether. Version 4.
+// * dice2.win - fair games that pay Ether. Version 5.
 //
-// * Ethereum smart contract, deployed at 0xD1CEeeeee8aF2791fC928beFfB0FFaC3387850DE.
+// * Ethereum smart contract, deployed at 0xD1CEeeeee83F8bCF3BEDad437202b6154E9F5405.
 //
 // * Uses hybrid commit-reveal + block hash random number generation that is immune
 //   to tampering by players, house and miners. Apart from being fully transparent,
@@ -106,6 +106,9 @@ contract Dice2Win {
     // Mapping from commits to all currently active & processed bets.
     mapping (uint => Bet) bets;
 
+    // Croupier account.
+    address public croupier;
+
     // Events that are issued to make statistic recovery easier.
     event FailedPayment(address indexed beneficiary, uint amount);
     event Payment(address indexed beneficiary, uint amount);
@@ -118,11 +121,18 @@ contract Dice2Win {
     constructor () public {
         owner = msg.sender;
         secretSigner = DUMMY_ADDRESS;
+        croupier = DUMMY_ADDRESS;
     }
 
     // Standard modifier on methods invokable only by contract owner.
     modifier onlyOwner {
         require (msg.sender == owner, "OnlyOwner methods called by non-owner.");
+        _;
+    }
+
+    // Standard modifier on methods invokable only by contract owner.
+    modifier onlyCroupier {
+        require (msg.sender == croupier, "OnlyCroupier methods called by non-croupier.");
         _;
     }
 
@@ -145,6 +155,11 @@ contract Dice2Win {
     // See comment for "secretSigner" variable.
     function setSecretSigner(address newSecretSigner) external onlyOwner {
         secretSigner = newSecretSigner;
+    }
+
+    // Change the croupier address.
+    function setCroupier(address newCroupier) external onlyOwner {
+        croupier = newCroupier;
     }
 
     // Change max bet reward. Setting this to zero effectively disables betting.
@@ -265,12 +280,11 @@ contract Dice2Win {
         bet.gambler = msg.sender;
     }
 
-    // Settlement transaction - can in theory be issued by anyone, but is designed to be
-    // handled by the dice2.win croupier bot. To settle a bet with a specific "commit",
-    // settleBet should supply a "reveal" number that would Keccak256-hash to
+    // This is the method used to settle 99% of bets. To process a bet with a specific
+    // "commit", settleBet should supply a "reveal" number that would Keccak256-hash to
     // "commit". "blockHash" is the block hash of placeBet block as seen by croupier; it
     // is additionally asserted to prevent changing the bet outcomes on Ethereum reorgs.
-    function settleBet(uint reveal, bytes32 blockHash) external {
+    function settleBet(uint reveal, bytes32 blockHash) external onlyCroupier {
         uint commit = uint(keccak256(abi.encodePacked(reveal)));
 
         Bet storage bet = bets[commit];
@@ -290,7 +304,7 @@ contract Dice2Win {
     // is different because of Ethereum chain reorg. We supply a full merkle proof of the
     // placeBet transaction receipt to provide untamperable evidence that uncle block hash
     // indeed was present on-chain at some point.
-    function settleBetUncleMerkleProof(uint reveal, uint40 canonicalBlockNumber) external {
+    function settleBetUncleMerkleProof(uint reveal, uint40 canonicalBlockNumber) external onlyCroupier {
         // "commit" for bet settlement can only be obtained by hashing a "reveal".
         uint commit = uint(keccak256(abi.encodePacked(reveal)));
 
@@ -476,7 +490,7 @@ contract Dice2Win {
             }
 
             assembly { shift := and(calldataload(sub(offset, 28)), 0xffff) }
-            require (shift < blobLength, "Shift bounds check.");
+            require (shift + 32 <= blobLength, "Shift bounds check.");
 
             offset += 4;
             assembly { hashSlot := calldataload(add(offset, shift)) }
@@ -497,7 +511,7 @@ contract Dice2Win {
         uint scratchBuf2 = scratchBuf1 + uncleHeaderLength;
         uint unclesLength; assembly { unclesLength := and(calldataload(sub(offset, 28)), 0xffff) }
         uint unclesShift;  assembly { unclesShift := and(calldataload(sub(offset, 26)), 0xffff) }
-        require (unclesShift < unclesLength, "Shift bounds check.");
+        require (unclesShift + uncleHeaderLength <= unclesLength, "Shift bounds check.");
 
         offset += 6;
         assembly { calldatacopy(scratchBuf2, offset, unclesLength) }
@@ -512,7 +526,7 @@ contract Dice2Win {
             blobLength := and(calldataload(sub(offset, 30)), 0xffff)
             shift := and(calldataload(sub(offset, 28)), 0xffff)
         }
-        require (shift < blobLength, "Shift bounds check.");
+        require (shift + 32 <= blobLength, "Shift bounds check.");
 
         offset += 4;
         assembly { hashSlot := calldataload(add(offset, shift)) }
